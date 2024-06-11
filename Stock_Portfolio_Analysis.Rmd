@@ -1,0 +1,243 @@
+---
+title: "Stock Portfolio Analysis"
+author: "Ialgen ALLAL"
+date: "2024-06-14"
+output: 
+  html_document:
+    toc: yes
+    toc_floats: yes
+    number_section: no
+bibliography: references.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+In this analysis, we will create and evaluate a stock portfolio using historical stock prices. The primary goal is to demonstrate the steps involved in constructing an efficient frontier and identifying the optimal portfolio with the highest Sharpe Ratio. We will use the R programming language along with several financial packages to accomplish this task.
+
+### Financial Concepts Overview
+
+**Efficient Frontier:** In modern portfolio theory, the efficient frontier is a set of optimal portfolios that offer the highest expected return for a defined level of risk or the lowest risk for a given level of expected return.
+
+**Sharpe Ratio:** The Sharpe Ratio measures the performance of an investment (such as a stock or portfolio) compared to a risk-free asset, after adjusting for its risk. The higher the Sharpe Ratio, the better the risk-adjusted performance.
+
+### Load necessary libraries
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+library(PerformanceAnalytics)
+library(PortfolioAnalytics)
+library(ggplot2)
+library(reshape2)
+```
+
+**PerformanceAnalytics:** Provides tools for performance and risk analysis of financial instruments or portfolios.
+
+**PortfolioAnalytics:** Facilitates portfolio optimization and analysis.
+
+**ggplot2:** A plotting system for R, based on the grammar of graphics, used for creating complex and customizable visualizations.
+
+**reshape2:** Reshaping data between wide and long formats.
+
+# Data loading and pre-analysis
+
+We start by loading the stock data from a CSV file hosted online.
+
+```{r}
+link <- "https://raw.githubusercontent.com/ialgen/RCoding/main/data_french_stocks_3y.csv"
+data <- read.csv(link)
+```
+
+To handle date-based data properly, we convert the `Date` column to `Date` type.
+
+```{r}
+data$Date <- as.Date(data$Date)
+```
+
+To facilitate plotting, we reshape the data from wide format to long format using the `melt` function from the `reshape2` package.
+
+```{r}
+melted_stock_data <- melt(data, id.vars = "Date")
+```
+
+### Plot historical stock values
+
+We use `ggplot2` to plot the historical stock values of different companies over time.
+
+```{r fig.width=10}
+ggplot(melted_stock_data, aes(x = Date, y = value, color = variable)) +
+  geom_line() +
+  labs(title = "Historical Stock Values", x = "Date", y = "Stock Value", color = "Company") +
+  theme_minimal()
+```
+
+We can observe that the stock prices vary significantly, making direct comparisons challenging. Therefore, it is essential to "normalize" the prices so that they all start from a common baseline.
+
+### Data normalization
+
+Normalization helps in comparing the performance of different stocks on a common scale. Here, we normalize the stock prices so that they all start at 100.
+
+```{r}
+normalize <- function(x) {
+  return (x / x[1] * 100)
+}
+normalized_stock_data <- data
+normalized_stock_data[,-1] <- lapply(data[,-1], normalize)
+
+# Reshaping the data
+melted_stock_data <- melt(normalized_stock_data, id.vars = "Date")
+```
+
+We plot the normalized stock values to visualize their relative performance over time.
+
+```{r fig.width=10}
+ggplot(melted_stock_data, aes(x = Date, y = value, color = variable)) +
+  geom_line() +
+  labs(title = "Normalized Historical Stock Values", x = "Date", y = "Normalized Stock Value", color = "Company") +
+  theme_minimal()
+```
+
+The stocks in our portfolio largely move independently of each other, even if there is a common trend. When some stocks rise, others may fall. This lack of synchronization is crucial for portfolio diversification. By combining stocks with low covariance, we can effectively mitigate risks, as the gains of some stocks can offset the losses of others.
+
+# Portfolio analysis
+
+### Data cleaning
+
+For further analysis, we remove the `Date` column and handle any missing values.
+
+```{r}
+row.names(data) <- data$Date
+prices <- data[,-1]
+prices <- prices[, colSums(is.na(prices)) == 0]
+```
+
+### Calculate returns
+
+We need to calculate returns from stock prices to perform our analysis. For this, we use the `Return.calculate` function from the `PerformanceAnalytics` package. Since returns can only be calculated from the second row onward, the first row will contain NA values and should be removed.
+
+```{r}
+returns <- na.omit(Return.calculate(prices))
+```
+
+### Set up the portfolio
+
+In this step, we define the structure of our portfolio by specifying the assets and imposing constraints on their weights. We also set objectives for optimizing the portfolio, aiming to maximize returns while minimizing risk.
+
+```{r}
+# Specify the portfolio with the assets' names
+portfolio <- portfolio.spec(assets = colnames(returns))
+# Add a constraint to ensure that the sum of the weights is approximately 1 (between 0.99 and 1.01)
+portfolio <- add.constraint(portfolio, type = "weight_sum", min_sum = 0.99, max_sum = 1.01)
+# Add a box constraint to set the minimum and maximum weight for each asset (between -0.05 and 1)
+portfolio <- add.constraint(portfolio, type="box", min=-0.05, max=1)
+# Add an objective to maximize the mean return
+portfolio <- add.objective(portfolio, type = "return", name = "mean")
+# Add an objective to minimize the standard deviation of returns (risk)
+portfolio <- add.objective(portfolio, type = "risk", name = "StdDev")
+```
+
+### Generate the efficient frontier
+
+The efficient frontier is a set of optimal portfolios that offer the highest expected return for a defined level of risk.
+
+```{r message=FALSE, warning=FALSE}
+ef <- create.EfficientFrontier(R = returns, portfolio = portfolio, 
+                               type = "mean-StdDev", n.portfolios = 25)
+```
+
+### Plot the efficient frontier
+
+We visualize the efficient frontier and the asset weights along it.
+
+The `rf` parameter represents the approximate daily risk-free rate, derived from the 5-year French Treasury bond.
+
+```{r fig.width=10}
+chart.EfficientFrontier(ef, match.col = "StdDev", type = "l",
+                        RAR.text = "SharpeRatio", chart.assets = TRUE, pch = 19, 
+                        cex = 0.5, main = "Efficient Frontier", rf=0.00012, col = "blue")
+chart.EF.Weights(ef, colorset = NULL,
+                 n.portfolios = 25, by.groups = FALSE, match.col = "StdDev", 
+                 main = "Weights along the Efficient Frontier",
+                 cex.lab = 0.8, cex.axis = 0.8, cex.legend = 0.8, legend.labels = NULL,
+                 element.color = "darkgray", legend.loc = "topright")
+```
+
+### Tangent portfolio
+The tangent portfolio is the portfolio on the efficient frontier with the highest Sharpe Ratio, indicating it is the most efficient in terms of risk-reward balance.
+
+We define the function to calculate the Sharpe Ratio and find the portfolio with the highest Sharpe Ratio
+
+```{r}
+get_max_sharpe_ratio_portfolio <- function(frontier, rf = 0.00012) {
+  # Initialize variables to store the maximum Sharpe Ratio and the corresponding portfolio
+  max_sharpe_ratio <- -Inf
+  max_sharpe_portfolio <- NULL
+  
+  # Iterate over each row in the frontier
+  for (i in 1:nrow(frontier)) {
+    portfolio <- frontier[i, ]
+    mean_return <- portfolio["mean"]
+    std_dev <- portfolio["StdDev"]
+    
+    # Calculate the Sharpe Ratio
+    sharpe_ratio <- (mean_return - rf) / std_dev
+    
+    # Check if this Sharpe Ratio is the highest so far
+    if (sharpe_ratio > max_sharpe_ratio) {
+      max_sharpe_ratio <- sharpe_ratio
+      max_sharpe_portfolio <- portfolio
+    }
+  }
+  
+  # Return the portfolio with the highest Sharpe Ratio
+  return(max_sharpe_portfolio)
+}
+```
+
+We identify the portfolio on the efficient frontier with the highest Sharpe Ratio.
+
+```{r}
+max_sharpe_portfolio <- get_max_sharpe_ratio_portfolio(ef[["frontier"]])
+print(max_sharpe_portfolio)
+
+# We extract the asset weights of the optimal portfolio for visualization.
+weights <- max_sharpe_portfolio[-(1:3)]  # Exclude 'mean', 'StdDev', and 'out' columns
+
+# We create a dataframe of asset weights for plotting.
+weights_df <- data.frame(Asset = names(weights), Weight = as.numeric(weights))
+```
+
+### Plot the weights of the tangent portfolio
+
+```{r fig.width=10}
+ggplot(weights_df, aes(x = Asset, y = Weight, fill = Asset)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Weights of the tangent portfolio (Highest Sharpe Ratio)", x = "Asset", y = "Weight") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+# Conclusion
+
+This analysis provides a *best* portfolio but is very limited to a specific time and set of stocks.
+
+While the efficient frontier provides a valuable framework for understanding the trade-off between risk and return in portfolio optimization, it is essential to recognize its limitations due to the underlying assumptions, which may not accurately reflect real-world conditions.
+
+The EF assumes that all investors behave rationally and are risk-averse. But, investor behavior can be highly irrational, some investors are willing to take on higher risks for the potential of higher returns, which deviates from the model's assumption of universal risk aversion. These investors may not choose the optimum portfolio given by this analysis.
+
+Another critical assumption is that investors can equaly borrow at a risk-free interest rate but this is not the case on the markets markets. As a result, the model's predictions may not be achievable for all investors.
+
+While the efficient frontier is a useful theoretical construct for portfolio optimization, its practical application is limited by several unrealistic assumptions.
+
+
+## References
+
+H. Wickham. ggplot2: Elegant Graphics for Data Analysis. Springer-Verlag New York, 2016.
+
+Peterson BG, Carl P (2020). _PerformanceAnalytics: Econometric Tools for Performance and Risk Analysis_. R package version 2.0.4, <https://CRAN.R-project.org/package=PerformanceAnalytics>.
+
+Peterson BG, Carl P (2018). _PortfolioAnalytics: Portfolio Analysis, Including Numerical Methods for Optimization of Portfolios_. R package version 1.1.0, <https://CRAN.R-project.org/package=PortfolioAnalytics>.
+
+Hadley Wickham (2007). Reshaping Data with the reshape Package. Journal of Statistical Software, 21(12), 1-20. <http://www.jstatsoft.org/v21/i12/>
